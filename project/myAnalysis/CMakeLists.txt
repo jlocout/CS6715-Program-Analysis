@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 # Project name and language
-project(myAnalysis LANGUAGES CXX)
+project(myAnalysis LANGUAGES C CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find LLVM package
 find_package(LLVM 14 REQUIRED CONFIG)
+find_package(ZLIB REQUIRED)
 
 # Add include directories
 include_directories(${LLVM_INCLUDE_DIRS})

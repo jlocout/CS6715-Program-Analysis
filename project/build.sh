@@ -10,7 +10,6 @@ if [ ! -d "build" ]; then
 fi
 
 cd build
-cmake -DCMAKE_BUILD_TYPE=$buildType ../myAnalysis
-make
+cmake -DCMAKE_BUILD_TYPE=$buildType ../myAnalysis || exit 1
+make || exit 1
 cd -
-
