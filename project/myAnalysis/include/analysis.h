@@ -10,6 +10,11 @@
 #include "generic_graph.h"
 #include "graph_visual.h"
 #include "llvm_wrapper.h"
+#include "pag.h"
+#include "cfg.h"
+#include "icfg.h"
+#include "otf_pta.h"
+
 
 //-----------------------------------------
 // base class of Analyzer
@@ -32,6 +37,101 @@ public:
     {
         (void)llvmParser;
         std::cout<<"Hello CS6717, this is a toy analyzer.\n";
+    }
+};
+
+
+//-----------------------------------------
+// CG Analyzer
+//-----------------------------------------
+class CGAnalyzer : public Analyzer 
+{
+public:
+    void runAnalysis(LLVM& llvmParser, const std::string& filename = "cg") override 
+    {
+        CG cg(&llvmParser);
+        cg.build();
+
+        CGVisual vis(filename, &cg);
+        vis.writeGraph();
+    }
+};
+
+
+
+//-----------------------------------------
+// CFG Analyzer
+//-----------------------------------------
+class CFGAnalyzer : public Analyzer 
+{
+public:
+    void runAnalysis(LLVM& llvmParser, const std::string& filename = "cfg") override 
+    {
+        for (auto it = llvmParser.func_begin(); it != llvmParser.func_end(); ++it) 
+        {
+            llvm::Function* F = *it;
+            if (F->isDeclaration()) continue;
+
+            CFG cfg;
+            cfg.build(*F);
+
+            CFGVisual vis(F->getName().str() + "_" + filename, &cfg);
+            vis.writeGraph();
+        }
+    }
+};
+
+
+//-----------------------------------------
+// ICFG Analyzer
+//-----------------------------------------
+class ICFGAnalyzer : public Analyzer 
+{
+public:
+    void runAnalysis(LLVM& llvmParser, const std::string& filename = "icfg") override 
+    {
+        ICFG icfg(&llvmParser);
+        icfg.build();
+
+        ICFGVisual vis(filename, &icfg);
+        vis.writeGraph();
+    }
+};
+
+
+//-----------------------------------------
+// PAG Analyzer
+//-----------------------------------------
+class PAGAnalyzer : public Analyzer 
+{
+public:
+    void runAnalysis(LLVM& llvmParser, const std::string& filename = "pag") override 
+    {
+        ICFG icfg(&llvmParser);
+        icfg.build();
+
+        PAG pag(&icfg);
+        pag.build();
+
+        PAGVis vis(filename, &pag);
+        vis.writeGraph();
+    }
+};
+
+
+//-----------------------------------------
+// PTA Analyzer
+//-----------------------------------------
+class PTAAnalyzer : public Analyzer 
+{
+public:
+    void runAnalysis(LLVM& llvmParser, const std::string& /*filename*/ = "") override 
+    {
+        ICFG icfg(&llvmParser);
+        icfg.build();
+
+        OTFPTA pta(icfg);
+        pta.solve();
     }
 };
 

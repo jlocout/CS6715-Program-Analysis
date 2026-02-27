@@ -56,99 +56,77 @@ public:
     ~CG() {}
 
 public:
-    
-    /*
-    * ============================
-    * CG::build() — Pseudocode
-    * ============================
-    *
-    * Goal:
-    *   Build the Call Graph (CG) from the LLVM module loaded by llvmParser.
-    *   The CG contains:
-    *     - One CGNode per function (skip declarations).
-    *     - One CGEdge from caller -> callee for each direct call instruction.
-    *   Also record callsites and collect indirect-call sites for later handling.
-    *
-    * ------------------------------------------------------------
-    * Step 0: Safety check
-    *   If llvmParser is null, nothing to build.
-    *
-    * ------------------------------------------------------------
-    * Step 1: Create CG nodes (one node per function)
-    *   For each Function F in the module:
-    *     - Skip if F is a declaration (no body).
-    *     - Create a CGNode for F: node = addCGNode(F)
-    *     - Save mapping: func2Nodes[F] = node
-    *
-    * Why do we need func2Nodes?
-    *   Later, when we see a call instruction that targets callee function G,
-    *   we can quickly find G’s CGNode using this map.
-    *
-    * ------------------------------------------------------------
-    * Step 2: Create CG edges (traverse functions and find call instructions)
-    *   Maintain:
-    *     visited  : set of CGNodes already processed
-    *     worklist : queue for BFS-style traversal over CGNodes
-    *
-    *   For each CGNode startNode in the graph:
-    *     - If already visited, skip.
-    *     - Push startNode into worklist.
-    *
-    *     While worklist is not empty:
-    *       (A) Pop one caller node from worklist.
-    *           Mark it visited.
-    *           callerFunc = callerNode.getLLVMFunc()
-    *
-    *       (B) Scan all instructions inside callerFunc:
-    *           for each BasicBlock BB in callerFunc:
-    *             for each Instruction I in BB:
-    *
-    *             (B1) Skip debug instructions:
-    *                  if I is DbgInfoIntrinsic or DbgVariableIntrinsic:
-    *                      continue
-    *
-    *             (B2) Check if I is a call-like instruction:
-    *                  callInst = dyn_cast<CallBase>(&I)
-    *                  if callInst is null:
-    *                      continue
-    *
-    *             (B3) Direct call case:
-    *                  calleeFunc = callInst->getCalledFunction()
-    *                  if calleeFunc != null:
-    *                      calleeNode = getCGNode(calleeFunc)
-    *                      addCGEdge(callerNode, calleeNode)
-    *
-    *                      // BFS expansion: process callee later if not visited
-    *                      if calleeNode not in visited:
-    *                          push calleeNode into worklist
-    *
-    *             (B4) Indirect call case (function pointer):
-    *                  else (calleeFunc == null):
-    *                      fpVal = callInst->getCalledOperand()
-    *                      fpVal = fpVal->stripPointerCasts()
-    *                      value2IndirectCS[fpVal].insert(callInst)
-    *
-    *                  // Note: We cannot add a CG edge yet because the target
-    *                  // function is not directly known at this point.
-    *
-    *             (B5) Record the callsite in the caller node:
-    *                  callerNode->addCallsite(callInst)
-    *
-    * ------------------------------------------------------------
-    * Output of this build:
-    *   - All functions with bodies become nodes in CG.
-    *   - For each *direct* call instruction, add an edge caller -> callee.
-    *   - All callsites are stored in their caller nodes (node->addCallsite).
-    *   - Indirect callsites are collected into value2IndirectCS for later resolution.
-    *
-    * Common mistakes to avoid:
-    *   - Forgetting to skip declarations (will cause missing bodies / null iteration).
-    *   - Forgetting to record func2Nodes mapping (callee lookup will fail).
-    *   - Adding duplicate edges without checks (depends on addCGEdge implementation).
-    */
-    void build()
+    void build ()
     {
-        // implementation here
+        if (!llvmParser) return;
+
+        for (auto it = llvmParser->func_begin(); it != llvmParser->func_end(); ++it) 
+        {
+            llvm::Function *F = *it;
+            if (F->isDeclaration()) continue;
+
+            CGNode *node = addCGNode(F);
+            func2Nodes[F] = node;
+        }
+
+        set<CGNode*> visited;
+        for (auto nodeItr = begin (); nodeItr != end (); nodeItr++)
+        {
+            CGNode *node = nodeItr->second;
+            if (visited.find(node) != visited.end()) continue;
+
+            queue<CGNode*> worklist;
+            worklist.push (node);
+            while (!worklist.empty()) 
+            {
+                node = worklist.front();
+                worklist.pop();
+                visited.insert(node);
+
+                llvm::Function* callerFunc = node->getLLVMFunc ();
+                for (llvm::BasicBlock &BB : *callerFunc) 
+                {
+                    for (llvm::Instruction &I : BB) 
+                    {
+                        if (llvm::isa<llvm::DbgInfoIntrinsic>(&I) ||
+                            llvm::isa<llvm::DbgVariableIntrinsic>(&I)) 
+                        {
+                            continue;
+                        }
+
+                        llvm::CallBase* callInst = llvm::dyn_cast<llvm::CallBase>(&I);
+                        if (callInst == NULL)
+                        {
+                            continue;
+                        }
+
+                        llvm::Function* calleeFunc = callInst->getCalledFunction();
+                        if (calleeFunc != NULL)
+                        {
+                            CGNode* calleeNode = getCGNode (calleeFunc);
+                            if (calleeNode == NULL)
+                            {
+                                continue;
+                            }
+                            addCGEdge (node, calleeNode);
+
+                            if (visited.find(calleeNode) == visited.end()) 
+                            {
+                                worklist.push(calleeNode);
+                            }
+                        }
+                        else
+                        {
+                            llvm::Value *fpVal = callInst->getCalledOperand();
+                            fpVal = fpVal->stripPointerCasts();
+                            value2IndirectCS[fpVal].insert(callInst);
+                        }
+
+                        node->addCallsite (callInst);  
+                    }
+                }
+            }
+        }     
     }
 
     inline CGNode* getCGNode (llvm::Function *llvmFunc)
@@ -159,6 +137,29 @@ public:
             return NULL;
         }
         return itr->second;
+    }
+
+    void refine(const set<llvm::CallBase*> &callSites,
+                const unordered_set<llvm::Function*> &callees)
+    {
+        for (llvm::CallBase *callInst : callSites)
+        {
+            llvm::Function *caller = callInst->getFunction();
+            if (!caller) 
+            {
+                continue;
+            }
+            CGNode* callerNode = getCGNode (caller);
+            assert (callerNode != NULL);
+
+            for (llvm::Function *callee : callees)
+            {
+                CGNode* calleeNode = getCGNode (callee);
+                assert (calleeNode != NULL);
+
+                addCGEdge (callerNode, calleeNode);
+            }
+        }
     }
 
     static set<llvm::CallBase*> getCallsites (llvm::Value* fVal)

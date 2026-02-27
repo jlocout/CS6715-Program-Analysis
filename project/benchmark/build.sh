@@ -7,6 +7,8 @@ if [ "$Action" == "clean" ]; then
 		cd $item 
 		make clean
 		rm -f demo.*
+		rm -f *.dot
+		rm -rf *.png
 		cd -
 	done
 	

@@ -85,59 +85,59 @@ public:
     CFG(unsigned initId = 1) { initNodeId = initId; }
     ~CFG() {}
 
-    /*
-    * ============================
-    * CFG::build(F) — Pseudocode
-    * ============================
-    *
-    * Goal:
-    *   Build the intra-procedural CFG for one LLVM function F.
-    *   Add two artificial nodes: ENTRY and EXIT.
-    *   Connect basic blocks using LLVM successor relations.
-    *
-    * Key Idea (Block Subgraph):
-    *   Each LLVM basic block BB is represented by a small “block subgraph”
-    *   returned by getBlockGraph(BB), which is a list/chain of CFG nodes:
-    *
-    *       getBlockGraph(BB)  ==>  [ n1 -> n2 -> ... -> nk ]
-    *                               ^                 ^
-    *                             first             last
-    *
-    *   When connecting blocks, we always connect:
-    *       last(currentBB)  --->  first(successorBB)
-    *
-    * Data Structures:
-    *   - worklist: queue of CFGNode*
-    *       Stores the *last node* of each discovered basic block subgraph.
-    *       We pop one node at a time and connect it to its successor blocks.
-    *
-    *   - visited: map<BasicBlock*, (firstNode, lastNode)>
-    *       Caches endpoints of each BB subgraph so each BB is built once.
-    *
-    * Pseudocode Steps:
-    *   1) If F has no body (F.isDeclaration()), return.
-    *   2) Create and add ENTRY and EXIT nodes.
-    *   3) Initialize worklist and visited.
-    *   4) Build entry basic block subgraph, connect ENTRY -> entry.first,
-    *      push entry.last, and mark entryBB as visited.
-    *   5) While worklist not empty:
-    *        a) Pop curLast, let curBB = curLast.getBasicBlock().
-    *        b) If curBB has no successors: addEdge(curLast, EXIT).
-    *        c) Else for each successor succBB:
-    *             - If succBB not visited:
-    *                 build succSub = getBlockGraph(succBB)
-    *                 addEdge(curLast, succSub.first)
-    *                 push succSub.last
-    *                 visited[succBB] = (succSub.first, succSub.last)
-    *             - Else:
-    *                 addEdge(curLast, visited[succBB].first)
-    *   6) Done.
-    */
-    void build(llvm::Function &F)
+    void build (llvm::Function &F)
     {
-        // implementation here
-    }
+        if (F.isDeclaration()) return;
 
+        // Create artificial entry/exit nodes
+        entryNode = new CFGEntryNode (getNextNodeId(), &F); 
+        addNode(entryNode->getId(), entryNode);
+        exitNode  = new CFGExitNode (getNextNodeId()); 
+        addNode(exitNode->getId(), exitNode);
+
+        queue<CFGNode*> worklist;
+        map<llvm::BasicBlock*, pair<CFGNode*, CFGNode*>> visited;
+
+        llvm::BasicBlock *entryBB = &F.getEntryBlock();
+        vector<CFGNode*> entrySubgraph = getBlockGraph(entryBB); 
+        if (!entrySubgraph.empty()) 
+        {
+            addCFGEdge(entryNode, entrySubgraph.front());
+            worklist.push(entrySubgraph.back());
+        }
+        visited[entryBB] = make_pair(entrySubgraph.front(), entrySubgraph.back());
+
+        while (!worklist.empty()) 
+        {
+            CFGNode *bbNode = worklist.front();
+            worklist.pop();
+            llvm::BasicBlock *llvmBB = bbNode->getBasicBlock ();
+            
+            if (llvm::succ_empty(llvmBB)) 
+            {
+                addCFGEdge(bbNode, exitNode);
+                continue;
+            }
+
+            for (llvm::BasicBlock *succBB : llvm::successors(llvmBB)) 
+            {
+                auto itr = visited.find(succBB);
+                if (itr == visited.end()) 
+                {
+                    vector<CFGNode*> succSubgraph = getBlockGraph(succBB);
+                    addCFGEdge(bbNode, succSubgraph.front());
+
+                    worklist.push(succSubgraph.back());
+                    visited[succBB] = make_pair(succSubgraph.front(), succSubgraph.back());
+                }
+                else
+                {
+                    auto & [subFirst, subLast] = itr->second;
+                    addCFGEdge(bbNode, subFirst);
+                }    
+            }
+        }
+    }
 
     inline CFGNode* getCFGNode (llvm::Instruction* inst)
     {
