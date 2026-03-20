@@ -30,6 +30,41 @@ public:
         return;
     }
 
+    void refine(llvm::Value *fpVal,
+                const std::unordered_set<llvm::Function*> &callees)
+    {
+        set<llvm::CallBase*> callSites = CG::getCallsites (fpVal);
+        if (callSites.empty()) 
+        {
+            return;
+        }
+
+        cg->refine (callSites, callees);
+
+        for (llvm::CallBase *callInst : callSites)
+        {
+            llvm::Function* caller = callInst->getParent ()->getParent();
+            CFG* callerCFG = getCFG(caller);
+            CFGNode* csNode = callerCFG->getCFGNode (callInst);
+            assert (csNode != NULL);
+
+            for (auto *callee : callees)
+            {
+                CFG* calleeCFG = getCFG(callee);
+                if (calleeCFG == NULL)
+                {
+                    continue;
+                }
+
+                CFGNode* calleeEntry = calleeCFG->getEntryNode();
+                CFGNode* calleeExit = calleeCFG->getExitNode();
+
+                addEdge(new CFGEdge(csNode, calleeEntry, EDGE_ICFG));
+                addEdge(new CFGEdge(calleeExit, csNode, EDGE_ICFG));
+            }
+        }
+    }
+
     cfg_iteratoir cfg_begin () { return func2CFG.begin (); }
     cfg_iteratoir cfg_end () { return func2CFG.end (); }
     LLVM* getLLVMParser () { return llvmParser; }
@@ -66,62 +101,42 @@ private:
         return;
     }
 
-    /*
-    * ==========================================
-    * ICFG::buildICFG(cg) — Pseudocode Annotation
-    * ==========================================
-    *
-    * Goal:
-    *   Build the Interprocedural Control Flow Graph (ICFG) by connecting
-    *   per-function CFGs using call graph (CG) edges.
-    *
-    * What we add to the ICFG:
-    *   For each call from caller -> callee, we add two interprocedural edges:
-    *
-    *     (1) Call edge:   callSite  --->  calleeCFG.entry
-    *     (2) Return edge: calleeCFG.exit ---> retSite
-    *
-    * Important:
-    *   - callSite is the CFG node where the call happens in the caller.
-    *   - retSite is the CFG node where execution continues after the call returns.
-    *   - One caller->callee relation may have multiple (callSite, retSite) pairs.
-    *     Example: the caller function may call the same callee at multiple callsites.
-    *
-    * Inputs:
-    *   cg : Call Graph that contains nodes (functions) and edges (calls)
-    *
-    * Helper functions used (provided by the template):
-    *   - getCFG(Function* F) -> CFG*:
-    *       returns the CFG previously built for F (or null if not available)
-    *   - getCallRetSitesNodes(callerCFG, callerCGNode, calleeFunc)
-    *       -> vector of (callSiteNode, retSiteNode) pairs
-    *       finds all callsites inside callerFunc that target calleeFunc, and
-    *       returns where to jump back after the call.
-    *
-    * Pseudocode:
-    *   For each caller function in the CG:
-    *     1) Fetch callerCFG. If missing, skip.
-    *     2) For each outgoing CG edge caller -> callee:
-    *          a) Fetch calleeCFG. If missing, skip.
-    *          b) Find all call/return-site pairs in caller that invoke this callee:
-    *               pairs = getCallRetSitesNodes(callerCFG, callerCGNode, calleeFunc)
-    *          c) Let calleeEntry = calleeCFG.entryNode
-    *             Let calleeExit  = calleeCFG.exitNode
-    *          d) For each (callSite, retSite) in pairs:
-    *               add ICFG edge: callSite  -> calleeEntry
-    *               add ICFG edge: calleeExit -> retSite
-    *
-    * Notes / Pitfalls:
-    *   - Do NOT connect calleeExit back to callSite; it must go to retSite.
-    *   - If calleeFunc is external (no CFG), you skip adding call/return edges.
-    *     (The callerCFG still represents local flow; the template chooses to skip.)
-    *   - There can be multiple callsites to the same callee; handle all of them.
-    */
-    void buildICFG(CG *cg)
+    void buildICFG(CG *cg) 
     {
-        // implementation here
-    }
+        for (auto itNode = cg->begin (); itNode != cg->end (); itNode++) 
+        {
+            CGNode* callerCGNode = itNode->second;
+            llvm::Function* callerFunc = callerCGNode->getLLVMFunc();
 
+            CFG* callerCFG = getCFG(callerFunc);
+            if (!callerCFG) continue;
+            
+            for (auto itEdge = callerCGNode->outEdgeBegin(); itEdge != callerCGNode->outEdgeEnd (); itEdge++)
+            {
+                CGEdge* edge = *itEdge;
+                CGNode* calleeCGNode = edge->getDstNode ();
+                llvm::Function* calleeFunc = calleeCGNode->getLLVMFunc();
+
+                CFG* calleeCFG = getCFG(calleeFunc);
+                if (calleeCFG == NULL)
+                {
+                    continue;
+                }
+                
+                vector<pair<CFGNode*, CFGNode*>> callRetSites = getCallRetSitesNodes(callerCFG, callerCGNode, calleeFunc);
+                CFGNode* calleeEntry = calleeCFG->getEntryNode();
+                CFGNode* calleeExit = calleeCFG->getExitNode();
+                    
+                for (auto csRs : callRetSites)
+                {
+                    CFGNode* callSite = csRs.first;
+                    CFGNode* retSite  = csRs.second;
+                    addEdge(new CFGEdge(callSite, calleeEntry, EDGE_ICFG));
+                    addEdge(new CFGEdge(calleeExit, retSite, EDGE_ICFG));
+                }   
+            }
+        }
+    }
 
 private:
     LLVM *llvmParser;
