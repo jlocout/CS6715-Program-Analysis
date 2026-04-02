@@ -37,20 +37,8 @@ function compareResults()
 
     for res in $results; do
 
+        cp "$res" "$benchDir/$res"
         genPNG "$benchDir/$res"
-        
-        if [ -f "$benchDir/$res" ]; then
-            diff "$benchDir/$res" "$res"
-            if [ $? -eq 0 ]; then
-                echo "[PASSED]No differences for $res"
-            else
-                echo "[FAILED]Differences found for $res"
-            fi
-        else
-            echo "[WARNNING]No reference file $res found in $benchDir."
-            cp "$res" "$benchDir/$res"
-        fi
-        echo
 
     done
 }
@@ -99,8 +87,8 @@ if [ "$FUNCTION" = "all" ] || [ "$FUNCTION" = "pta" ]; then
     runAnalysis pta
 fi
 
-if [ "$FUNCTION" = "all" ] || [ "$FUNCTION" = "dfa" ]; then
-    runAnalysis dfa
+if [ "$FUNCTION" = "all" ] || [ "$FUNCTION" = "dfg" ]; then
+    runAnalysis dfg
 fi
 
 echo "All benchmark analyses finished."

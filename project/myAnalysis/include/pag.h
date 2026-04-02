@@ -315,120 +315,67 @@ private:
         return llvmParser->getValueLabel (V);
     }
 
-    /*
-    * ============================================================
-    * PAG::handleIntraEdge() — Pseudocode Guidance
-    * ============================================================
-    *
-    * Goal:
-    *   Inspect ONE LLVM instruction and, if it represents a pointer-related
-    *   operation, add the corresponding constraint edge(s) into the PAG.
-    *
-    *   We handle four core pointer constraints:
-    *     (1) Address-of:  p = &a
-    *     (2) Copy:        q = p
-    *     (3) Store:       *p = q
-    *     (4) Load:        q = *p
-    *
-    * ------------------------------------------------------------
-    * Step 0: Classify the instruction
-    *   Use llvmParser helpers to decide which constraint this instruction is:
-    *     - isAddressOf(inst)  / getOperandsAssignment
-    *     - isAssignment(inst) / getOperandsAssignment
-    *     - isStore(inst)      / getOperandsStore
-    *     - isLoad(inst)       / getOperandsLoad
-    *
-    *   If none match, ignore the instruction (not relevant to PAG).
-    *
-    * ------------------------------------------------------------
-    * Step 1: Address-of constraint (p = &a)
-    *   If inst is an address-of:
-    *     (A) Extract operands:
-    *         (pointerVal, memLocVal) = getOperandsAddressOf(inst)
-    *           - pointerVal : the pointer variable p
-    *           - memLocVal  : the memory object a (the “location”)
-    *
-    *     (B) Create/get PAG nodes:
-    *         ptrNode    = addValueNode(pointerVal)
-    *         memLocNode = addValueNode(memLocVal)
-    *
-    *     (C) Add constraint edge:
-    *         memLoc  ->  ptr     with type CST_ADDR_OF
-    *
-    *   Meaning:
-    *     The pointer p can point to the abstract object a.
-    *
-    * ------------------------------------------------------------
-    * Step 2: Copy / assignment constraint (q = p)
-    *   If inst is an assignment:
-    *     (A) Extract operands:
-    *         (srcVal, dstVal) = getOperandsAssignment(inst)
-    *           - srcVal : p
-    *           - dstVal : q
-    *
-    *     (B) Create/get PAG nodes:
-    *         srcNode = addValueNode(srcVal)
-    *         dstNode = addValueNode(dstVal)
-    *
-    *     (C) Add constraint edge:
-    *         src  ->  dst    with type CST_COPY
-    *
-    *   Meaning:
-    *     pts(q) ⊇ pts(p)
-    *
-    * ------------------------------------------------------------
-    * Step 3: Store constraint (*p = q)
-    *   If inst is a store:
-    *     (A) Extract operands:
-    *         (ptrVal, srcVal) = getOperandsStore(inst)
-    *           - ptrVal : p (the pointer being dereferenced)
-    *           - srcVal : q (the value being stored)
-    *
-    *     (B) Create/get PAG nodes:
-    *         ptrNode = addValueNode(ptrVal)
-    *         srcNode = addValueNode(srcVal)
-    *
-    *     (C) Add constraint edge:
-    *         src  ->  ptr    with type CST_STORE
-    *
-    *   Meaning (in Andersen solving):
-    *     For each o in pts(p), pts(o) ⊇ pts(q)
-    *
-    * ------------------------------------------------------------
-    * Step 4: Load constraint (q = *p)
-    *   If inst is a load:
-    *     (A) Extract operands:
-    *         (ptrVal, dstVal) = getOperandsLoad(inst)
-    *           - ptrVal : p (the pointer being dereferenced)
-    *           - dstVal : q (the loaded value)
-    *
-    *     (B) Create/get PAG nodes:
-    *         ptrNode = addValueNode(ptrVal)
-    *         dstNode = addValueNode(dstVal)
-    *
-    *     (C) Add constraint edge:
-    *         ptr  ->  dst    with type CST_LOAD
-    *
-    *   Meaning (in Andersen solving):
-    *     For each o in pts(p), pts(q) ⊇ pts(o)
-    *
-    * ------------------------------------------------------------
-    * Output of this function:
-    *   - Adds at most ONE constraint edge per instruction (in this simplified model).
-    *   - Ensures all involved LLVM Values have PAG nodes (via addValueNode()).
-    *
-    * Common mistakes to avoid:
-    *   - Swapping operand order for COPY (must be src -> dst).
-    *   - Confusing STORE vs LOAD directions:
-    *       STORE uses (src -> ptr)  [because it writes through ptr]
-    *       LOAD  uses (ptr -> dst)  [because it reads through ptr]
-    *   - Forgetting to create nodes for both operands before creating the edge.
-    *   - Not stripping casts for pointer operands if your parser requires it
-    *     (your llvmParser helpers usually handle this).
-    */
     inline void handleIntraEdge (llvm::Instruction* inst)
     {
+        // 1) p = &a  (“address-of”)
+        if (llvmParser->isAddressOf(inst))
+        {
+            // e.g., getOperandsAddressOf() returns (pointerVal, memLocVal)
+            auto [pointerVal, memLocVal] = llvmParser->getOperandsAddressOf(inst);
+                    
+            PAGNode *ptrNode   = addValueNode(pointerVal);
+            PAGNode *memLocNode= addValueNode(memLocVal);
+                    
+            // Usually “ADDR_OF” means we conceptually link memLoc -> ptr
+            PAGEdge *addrEdge = new PAGEdge(memLocNode, ptrNode, CST_ADDR_OF);
+            addEdge(addrEdge);  
+        }
+                
+        // 2) q = p   (“assignment”)
+        else if (llvmParser->isAssignment(inst))
+        {
+            // dstVal = srcVal
+            auto [srcVal, dstVal] = llvmParser->getOperandsAssignment(inst);
+
+            PAGNode *srcNode = addValueNode(srcVal);
+            PAGNode *dstNode = addValueNode(dstVal);
+
+            PAGEdge *copyEdge = new PAGEdge(srcNode, dstNode, CST_COPY);
+            addEdge(copyEdge);
+        }
+
+        // 3) *p = q  (“store”)
+        else if (llvmParser->isStore(inst))
+        {
+            // e.g., *ptrVal = srcVal
+            auto [ptrVal, srcVal] = llvmParser->getOperandsStore(inst);
+
+            PAGNode *ptrNode = addValueNode(ptrVal);
+            PAGNode *srcNode = addValueNode(srcVal);
+
+            PAGEdge *storeEdge = new PAGEdge(srcNode, ptrNode, CST_STORE);
+            addEdge(storeEdge);   
+        }
+
+        // 4) q = *p  (“load”)
+        else if (llvmParser->isLoad(inst))
+        {
+            // e.g., dstVal = *ptrNode
+            auto [ptrVal, dstVal] = llvmParser->getOperandsLoad(inst);
+
+            PAGNode *ptrNode = addValueNode(ptrVal);
+            PAGNode *valNode = addValueNode(dstVal);
+
+            PAGEdge *loadEdge = new PAGEdge(ptrNode, valNode, CST_LOAD);
+            addEdge(loadEdge);
+        }
         
+        // 5) other instructions
+        else
+        {
+            //llvm::errs()<<*inst<<"\n";
+        }
+
         return;
     }
 

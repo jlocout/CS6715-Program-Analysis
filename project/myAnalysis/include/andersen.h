@@ -32,128 +32,79 @@ private:
     bool initialized;
 
 private:
-    /*
-    * ============================================================
-    * Andersen::initializePTS() — Pseudocode Guidance (Phase 2)
-    * ============================================================
-    *
-    * Goal:
-    *   Initialize the points-to sets (PTS) for all PAG nodes, using only
-    *   the ADDR_OF constraints (p = &a).
-    *
-    *   After this phase:
-    *     - Every PAG node has an entry in ptsMap (possibly empty).
-    *     - For each edge (a -> p) of type CST_ADDR_OF:
-    *         a is inserted into pts(p)
-    *     - Any node whose PTS changed is pushed into the worklist to
-    *       start propagation in Phase 3.
-    *
-    * ------------------------------------------------------------
-    * Step 0: Avoid repeated initialization
-    *   If initialized == true:
-    *     - Return immediately (do not re-create ptsMap / worklist content).
-    *
-    * ------------------------------------------------------------
-    * Step 1: Create an empty PTS set for every PAG node
-    *   For each node in PAG:
-    *     ptsMap[node] = empty set
-    *
-    * Why?
-    *   Later propagation assumes every node has a valid ptsMap entry.
-    *
-    * ------------------------------------------------------------
-    * Step 2: Seed PTS using CST_ADDR_OF edges
-    *   For each node 'n' in PAG:
-    *     For each incoming edge e of n:
-    *       - Only handle address-of constraints:
-    *           if e.type != CST_ADDR_OF: continue
-    *
-    *       - Let src = e.getSrcNode()   // memory object 'a'
-    *       - Insert src into ptsMap[n]  // pts(p) contains a
-    *
-    *       - If insertion changed ptsMap[n]:
-    *           push n into worklist
-    *
-    * Intuition:
-    *   Address-of edges directly create initial points-to facts.
-    *   These facts enable later COPY/LOAD/STORE propagation.
-    *
-    * ------------------------------------------------------------
-    * Output of this function:
-    *   - ptsMap is allocated for all nodes.
-    *   - Worklist contains exactly the nodes whose PTS became non-empty
-    *     (or otherwise changed) due to ADDR_OF constraints.
-    *   - initialized is set to true.
-    *
-    * Common mistakes to avoid:
-    *   - Forgetting to create empty ptsMap entries first (can cause missing keys).
-    *   - Seeding the wrong direction (must insert src into pts(node)).
-    *   - Forgetting to push changed nodes into worklist (solver will not start).
-    *   - Re-initializing multiple times (will wipe results and break OTF loop).
-    */
+    // 1) Initialize sets from ADDR_OF edges
     void initializePTS()
     {
-        return;
+        if (initialized == true)
+        {
+            return;
+        }
+
+        for (auto it = pag->begin (); it != pag->end (); it++) 
+        {
+            PAGNode *node = it->second;
+            ptsMap[node] = PTS ();
+        }
+
+        for (auto it = pag->begin (); it != pag->end (); it++) 
+        {
+            PAGNode *node = it->second;
+
+            for (auto itEdge = node->inEdgeBegin(); itEdge != node->inEdgeEnd(); itEdge++)
+            {
+                PAGEdge* edge = *itEdge;
+                if (edge->cstType != CST_ADDR_OF) 
+                {
+                    continue;
+                }
+
+                PAGNode *src = edge->getSrcNode();
+                bool changed = ptsMap[node].insert(src);
+                if (changed) 
+                {
+                    worklist.push(node);
+                }
+
+                //cout<<"@@initializePTS: \n";
+                //showPTS (src);
+                //showPTS (node);
+                //cout<<"\n";
+            }
+        }
+
+        initialized = true;   
     }
 
-    /*
-    * ============================================================
-    * Andersen::solveConstraints() — Pseudocode Guidance (Phase 3)
-    * ============================================================
-    *
-    * Goal:
-    *   Propagate points-to information along PAG constraint edges until a fixpoint.
-    *   This is the main Andersen worklist solver.
-    *
-    * Key idea:
-    *   - The worklist contains nodes whose points-to sets (PTS) were updated.
-    *   - When a node's PTS grows, its outgoing constraints may enable new facts
-    *     for other nodes (or for objects reached through load/store).
-    *   - We repeatedly apply constraint rules until no node changes (worklist empty).
-    *
-    * ------------------------------------------------------------
-    * Step 0: Worklist-driven fixpoint iteration
-    *   While worklist is not empty:
-    *     (A) Pop one node 'n'
-    *     (B) For each outgoing edge e from n:
-    *         apply the propagation rule based on e.cstType
-    *
-    * ------------------------------------------------------------
-    * Step 1: Handle each constraint type
-    *   For each outgoing edge e = (src -> dst):
-    *
-    *   (1) COPY edge (src -> dst), CST_COPY
-    *       - Meaning:  dst = src
-    *       - Rule:     pts(dst) ⊇ pts(src)
-    *       - Implementation: handleCopyEdge(e)
-    *
-    *   (2) STORE edge (src -> ptr), CST_STORE
-    *       - Meaning:  *ptr = src
-    *       - Rule:     for each o in pts(ptr): pts(o) ⊇ pts(src)
-    *       - Implementation: handleStoreEdge(e)
-    *
-    *   (3) LOAD edge (ptr -> dst), CST_LOAD
-    *       - Meaning:  dst = *ptr
-    *       - Rule:     for each o in pts(ptr): pts(dst) ⊇ pts(o)
-    *       - Implementation: handleLoadEdge(e)
-    *
-    *   (4) ADDR_OF edges are already handled in initializePTS()
-    *       - Skip here.
-    *
-    * ------------------------------------------------------------
-    * Output of this function:
-    *   - When the loop terminates, the analysis reaches a fixpoint:
-    *       no propagation rule can add new points-to facts.
-    *
-    * Common mistakes to avoid:
-    *   - Not pushing affected nodes back into worklist inside handle*Edge()
-    *     when their ptsMap changes (solver will stop too early).
-    *   - Treating STORE/LOAD as simple copy edges (they require dereference via pts).
-    *   - Forgetting that LOAD/STORE may update object nodes (not only pointer vars).
-    */
+    // 2) Propagate constraints until fixpoint
     void solveConstraints()
     {
-        return;
+        while (!worklist.empty()) 
+        {
+            PAGNode *node = worklist.front();
+            worklist.pop();
+
+            // For each outgoing edge from 'n', apply the relevant rule
+            for (auto it = node->outEdgeBegin(); it != node->outEdgeEnd (); it++)
+            {
+                PAGEdge* outEdge = *it;
+                switch (outEdge->cstType) 
+                {
+                    case CST_COPY:
+                        handleCopyEdge(outEdge);
+                        break;
+                    case CST_STORE:
+                        handleStoreEdge(outEdge);
+                        break;
+                    case CST_LOAD:
+                        handleLoadEdge(outEdge);
+                        break;
+                    case CST_ADDR_OF:
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
     }
 
     // 2a) Copy: PTS(dst) ⊇ PTS(src)

@@ -17,11 +17,13 @@ int main(int argc, char** argv)
     
     if (cmdParser.hasOption("h")) 
     {
+        cmdParser.help ();
         return 0;
     }
 
     if (!cmdParser.hasOption("b"))
     {
+        cmdParser.help ();
         return 0;
     }
 
